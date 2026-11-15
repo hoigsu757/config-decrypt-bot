@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { mkdtemp, writeFile, readFile, rm, readdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { emptyResult, buildVless, buildTrojan } from "./format.js";
+import { emptyResult, buildVless, buildTrojan, buildSs } from "./format.js";
 
 const BIN = process.env.PANTEGNOS_BIN || "pantegnos";
 
@@ -106,43 +106,134 @@ function parsePantegnosText(text, name, bytes) {
     if (l.startsWith("vless://") && !r.vless) r.vless = l;
   }
 
-  // JSON blob
-  const jsonMatch = text.match(/\{[\s\S]*"Common"[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const j = JSON.parse(jsonMatch[0]);
-      const p = (j.Common || [])[0] || {};
-      r.server.protocol = String(p.Protocol || "vless").toLowerCase();
-      r.server.host = p.Hostname || p.Host;
-      r.server.port = p.Port;
-      r.server.uuid = p.UserID;
-      r.server.sni = p.SNI;
-      r.server.path = p.Path;
-      r.server.transport = (p.TransferProtocol || "tcp").toLowerCase();
-      r.server.tls = (p.TLSType || "").toLowerCase();
-      r.server.alpn = p.Alpn;
-      r.server.remark = p.Remark;
-      r.server.encryption = p.EncryptMethod || "none";
-      if (r.server.protocol === "vless" && !r.vless) {
-        r.vless = buildVless(r.server);
-        if (r.vless) r.links.push(r.vless);
+  const parsed = extractJson(text);
+  const profiles = profilesFrom(parsed);
+  if (profiles.length) {
+    r.servers = profiles;
+    r.server = profiles[0];
+    for (const s of profiles) {
+      if (s.protocol === "vless" && !r.vless) {
+        const link = buildVless(s);
+        if (link) {
+          r.vless = link;
+          r.links.push(link);
+        }
+      } else if (s.protocol === "trojan") {
+        const link = buildTrojan(s);
+        if (link) r.links.push(link);
+      } else if (s.protocol === "ss") {
+        const link = buildSs(s);
+        if (link) r.links.push(link);
       }
-    } catch {}
+    }
+  } else {
+    const jsonMatch = text.match(/\{[\s\S]*"Common"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const j = JSON.parse(jsonMatch[0]);
+        const p = (j.Common || [])[0] || {};
+        applyCommon(r, p);
+      } catch {}
+    }
   }
 
-  // fill server from first vless/trojan link
   if (r.vless) fillFromLink(r, r.vless);
-  else if (r.links[0]) fillFromLink(r, r.links[0]);
+  else if (r.links[0] && !r.server?.host) fillFromLink(r, r.links[0]);
 
-  // strip key material noise from note
-  const msg = text
-    .split("\n")
-    .filter((l) => !l.startsWith("//") && !l.includes("Saved to") && l.trim())
-    .slice(0, 8)
-    .join("\n")
-    .slice(0, 300);
-  if (!r.links.length && !r.server.host) r.note = msg || "خروجی خالی از Pantegnos";
+  if (!r.links.length && !r.server?.host) {
+    const msg = text
+      .split("\n")
+      .filter((l) => !l.startsWith("//") && !l.includes("Saved to") && l.trim())
+      .slice(0, 8)
+      .join("\n")
+      .slice(0, 300);
+    r.note = msg || "خروجی خالی از Pantegnos";
+  }
   return r;
+}
+
+function extractJson(text) {
+  const start = text.search(/[[{]/);
+  if (start < 0) return null;
+  const slice = text.slice(start);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    const end = Math.max(slice.lastIndexOf("]"), slice.lastIndexOf("}"));
+    if (end > 0) {
+      try { return JSON.parse(slice.slice(0, end + 1)); } catch {}
+    }
+  }
+  return null;
+}
+
+function profilesFrom(parsed) {
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    if (item.v2rayProfile || item.address || item.type) out.push(fromNpv(item));
+    else if (item.Common) {
+      const stub = emptyResult("x");
+      applyCommon(stub, (item.Common || [])[0] || {});
+      if (stub.server.host) out.push(stub.server);
+    }
+  }
+  return out.filter((s) => s.host);
+}
+
+function fromNpv(item) {
+  const p = item.v2rayProfile || item;
+  const addr = String(item.address || "");
+  const [addrHost, addrPort] = addr.split(":");
+  const host = p.server || addrHost;
+  const port = String(p.serverPort || addrPort || "");
+  const method = p.method || "";
+  const password = p.password || p.id || "";
+  const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(password);
+  const ssMethod = /^(aes-256-gcm|aes-128-gcm|chacha20-ietf-poly1305|chacha20-poly1305|2022-blake3-aes-256-gcm|2022-blake3-aes-128-gcm)$/i.test(method);
+  let protocol = String(item.type || "v2ray").toLowerCase();
+  if (uuidLike && (method === "none" || method === "" || p.network)) protocol = "vless";
+  else if (ssMethod) protocol = "ss";
+  else if (p.network === "tcp" && method === "chacha20-poly1305") protocol = "trojan";
+
+  return {
+    protocol,
+    host,
+    port,
+    uuid: protocol === "vless" ? password : undefined,
+    password: protocol === "vless" ? undefined : password,
+    method: ssMethod ? method : undefined,
+    transport: p.network || undefined,
+    tls: p.security || undefined,
+    security: p.security || undefined,
+    sni: p.sni || undefined,
+    hostHeader: p.host || undefined,
+    path: p.path || undefined,
+    alpn: p.alpn || undefined,
+    fp: p.fingerPrint || p.fp || undefined,
+    mode: p.xhttpMode || p.mode || undefined,
+    remark: p.remarks || item.name || undefined,
+    encryption: protocol === "vless" ? "none" : undefined,
+  };
+}
+
+function applyCommon(r, p) {
+  r.server.protocol = String(p.Protocol || "vless").toLowerCase();
+  r.server.host = p.Hostname || p.Host;
+  r.server.port = p.Port;
+  r.server.uuid = p.UserID;
+  r.server.sni = p.SNI;
+  r.server.path = p.Path;
+  r.server.transport = (p.TransferProtocol || "tcp").toLowerCase();
+  r.server.tls = (p.TLSType || "").toLowerCase();
+  r.server.alpn = p.Alpn;
+  r.server.remark = p.Remark;
+  r.server.encryption = p.EncryptMethod || "none";
+  if (r.server.protocol === "vless" && !r.vless) {
+    r.vless = buildVless(r.server);
+    if (r.vless) r.links.push(r.vless);
+  }
 }
 
 function fillFromLink(r, link) {

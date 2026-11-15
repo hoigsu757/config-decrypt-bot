@@ -15,8 +15,16 @@ export function buildVless(s) {
   if (s.hostHeader) q.set("host", s.hostHeader);
   if (s.path) q.set("path", s.path);
   if (s.flow) q.set("flow", s.flow);
+  if (s.mode) q.set("mode", s.mode);
   const hash = s.remark ? `#${encodeURIComponent(s.remark)}` : "";
   return `vless://${s.uuid}@${s.host}:${s.port}?${q.toString()}${hash}`;
+}
+
+export function buildSs(s) {
+  if (!s?.method || !s?.password || !s?.host || !s?.port) return null;
+  const user = Buffer.from(`${s.method}:${s.password}`).toString("base64url");
+  const hash = s.remark ? `#${encodeURIComponent(s.remark)}` : "";
+  return `ss://${user}@${s.host}:${s.port}${hash}`;
 }
 
 export function buildTrojan(s) {
@@ -47,14 +55,37 @@ export function formatReply(r) {
     lines.push("🔗 <b>لینک‌ها</b>");
     for (const l of other) lines.push(`<code>${esc(l)}</code>`);
   }
-  const s = r.server || {};
-  const rows = [
+  const blocks = Array.isArray(r.servers) && r.servers.length ? r.servers : [r.server || {}];
+  const shown = blocks.filter((b) => b && Object.values(b).some((v) => v));
+  if (shown.length) {
+    shown.forEach((srv, i) => {
+      const rows = serverRows(srv);
+      if (!rows.length) return;
+      lines.push("");
+      lines.push(shown.length > 1 ? `📋 <b>سرور ${i + 1}</b>` : "📋 <b>اطلاعات سرور</b>");
+      for (const [k, v] of rows) lines.push(`• <b>${esc(k)}:</b> <code>${esc(String(v))}</code>`);
+    });
+  }
+  if (r.note) {
+    lines.push("");
+    lines.push(`ℹ️ ${esc(r.note)}`);
+  }
+  if (!r.vless && !other.length && !shown.length) {
+    lines.push("");
+    lines.push("⚠️ چیزی استخراج نشد.");
+  }
+  return lines.join("\n");
+}
+
+function serverRows(s) {
+  return [
     ["پروتکل", s.protocol],
     ["آدرس", s.host],
     ["پورت", s.port],
     ["UUID", s.uuid],
     ["کاربر", s.user],
     ["رمز", s.password],
+    ["متد", s.method],
     ["Transport", s.transport],
     ["TLS", s.tls ?? s.security],
     ["SNI", s.sni],
@@ -63,22 +94,9 @@ export function formatReply(r) {
     ["ALPN", s.alpn],
     ["FP", s.fp],
     ["Flow", s.flow],
+    ["Mode", s.mode],
     ["Remark", s.remark],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
-  if (rows.length) {
-    lines.push("");
-    lines.push("📋 <b>اطلاعات سرور</b>");
-    for (const [k, v] of rows) lines.push(`• <b>${esc(k)}:</b> <code>${esc(String(v))}</code>`);
-  }
-  if (r.note) {
-    lines.push("");
-    lines.push(`ℹ️ ${esc(r.note)}`);
-  }
-  if (!r.vless && !other.length && !rows.length) {
-    lines.push("");
-    lines.push("⚠️ چیزی استخراج نشد.");
-  }
-  return lines.join("\n");
 }
 
 function esc(s) {
