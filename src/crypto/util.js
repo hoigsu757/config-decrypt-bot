@@ -41,6 +41,13 @@ export async function aesGcmDecrypt(keyBytes, nonce, ciphertextAndTag, aad) {
   return new Uint8Array(await crypto.subtle.decrypt(opts, key, ciphertextAndTag));
 }
 
+export async function aesGcmEncrypt(keyBytes, nonce, plaintext, aad) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]);
+  const opts = { name: "AES-GCM", iv: nonce };
+  if (aad) opts.additionalData = aad;
+  return new Uint8Array(await crypto.subtle.encrypt(opts, key, plaintext));
+}
+
 export async function pbkdf2Sha256(password, salt, iterations, length = 32) {
   const base = await crypto.subtle.importKey(
     "raw",
