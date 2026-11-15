@@ -1,5 +1,5 @@
 export function emptyResult(format) {
-  return { format, links: [], vless: null, server: {}, note: null };
+  return { format, links: [], vless: null, server: {}, servers: null, note: null };
 }
 
 export function buildVless(s) {
@@ -41,40 +41,48 @@ export function buildTrojan(s) {
   return `trojan://${encodeURIComponent(s.password)}@${s.host}:${s.port}?${q.toString()}${hash}`;
 }
 
-export function formatReply(r) {
-  const lines = [];
-  lines.push(`📦 <b>فرمت:</b> ${esc(r.format)}`);
-  if (r.vless) {
-    lines.push("");
-    lines.push("🔗 <b>VLESS</b>");
-    lines.push(`<code>${esc(r.vless)}</code>`);
-  }
-  const other = (r.links || []).filter((l) => l && l !== r.vless);
-  if (other.length) {
-    lines.push("");
-    lines.push("🔗 <b>لینک‌ها</b>");
-    for (const l of other) lines.push(`<code>${esc(l)}</code>`);
-  }
+/** Split result into separate Telegram messages (format, links, servers). */
+export function formatMessages(r) {
+  const msgs = [];
   const blocks = Array.isArray(r.servers) && r.servers.length ? r.servers : [r.server || {}];
-  const shown = blocks.filter((b) => b && Object.values(b).some((v) => v));
-  if (shown.length) {
-    shown.forEach((srv, i) => {
-      const rows = serverRows(srv);
-      if (!rows.length) return;
-      lines.push("");
-      lines.push(shown.length > 1 ? `📋 <b>سرور ${i + 1}</b>` : "📋 <b>اطلاعات سرور</b>");
-      for (const [k, v] of rows) lines.push(`• <b>${esc(k)}:</b> <code>${esc(String(v))}</code>`);
-    });
+  const shown = blocks.filter((b) => b && Object.values(b).some((v) => v !== undefined && v !== null && v !== ""));
+  const links = [...new Set((r.links || []).filter(Boolean))];
+  const hasData = Boolean(r.vless || links.length || shown.length);
+
+  msgs.push(`📦 <b>فرمت:</b> ${esc(r.format)}`);
+
+  if (r.vless) {
+    msgs.push(`🔗 <b>VLESS</b>\n<code>${esc(r.vless)}</code>`);
   }
+
+  for (const l of links) {
+    if (l === r.vless) continue;
+    const kind = l.split("://")[0].toUpperCase();
+    msgs.push(`🔗 <b>${esc(kind)}</b>\n<code>${esc(l)}</code>`);
+  }
+
+  shown.forEach((srv, i) => {
+    const rows = serverRows(srv);
+    if (!rows.length) return;
+    const title = shown.length > 1 ? `📋 <b>اطلاعات سرور ${i + 1}</b>` : "📋 <b>اطلاعات سرور</b>";
+    const body = rows.map(([k, v]) => `• <b>${esc(k)}:</b> <code>${esc(String(v))}</code>`).join("\n");
+    msgs.push(`${title}\n${body}`);
+  });
+
   if (r.note) {
-    lines.push("");
-    lines.push(`ℹ️ ${esc(r.note)}`);
+    const note = String(r.note).slice(0, 1500);
+    msgs.push(`ℹ️ ${esc(note)}`);
   }
-  if (!r.vless && !other.length && !shown.length) {
-    lines.push("");
-    lines.push("⚠️ چیزی استخراج نشد.");
+
+  if (!hasData && !r.note) {
+    msgs.push("⚠️ چیزی استخراج نشد.");
   }
-  return lines.join("\n");
+
+  return msgs;
+}
+
+export function formatReply(r) {
+  return formatMessages(r).join("\n\n");
 }
 
 function serverRows(s) {
@@ -91,6 +99,8 @@ function serverRows(s) {
     ["SNI", s.sni],
     ["Host", s.hostHeader],
     ["Path", s.path],
+    ["Payload", s.payload],
+    ["Remote", s.remoteProxy],
     ["ALPN", s.alpn],
     ["FP", s.fp],
     ["Flow", s.flow],

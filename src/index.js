@@ -1,7 +1,7 @@
 import express from "express";
-import { sendMessage, downloadFile, tgApi } from "./telegram/api.js";
+import { sendMessage, editMessage, pinMessage, downloadFile, tgApi } from "./telegram/api.js";
 import { openBytes } from "./decrypt/open.js";
-import { formatReply } from "./decrypt/format.js";
+import { formatMessages } from "./decrypt/format.js";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = Number(process.env.PORT || 3000);
@@ -11,6 +11,35 @@ const USE_POLLING = process.env.USE_POLLING === "1" || process.env.USE_POLLING =
 
 /** chatId -> password */
 const pendingPass = new Map();
+/** chatId -> pinned welcome message_id */
+const pinnedMsg = new Map();
+
+const WELCOME = [
+  "👋 خوش اومدی",
+  "",
+  "کانال: @Meowhub2",
+  "",
+  "فایل یا لینک کانفیگ رو بفرست تا باز بشه.",
+  "",
+  "<b>فرمت‌هایی که باز می‌کنم:</b>",
+  "• NPVS / NPVT",
+  "• HTTP Injector (.ehi)",
+  "• HTTP Custom (.hc)",
+  "• NetMod (.nm)",
+  "• SlipNet",
+  "• V2Box",
+  "• OpenVPN / AmneziaWG",
+  "• ArgoVPN / Rocket Tunnel",
+  "• لینک vless / trojan / ss",
+  "",
+  "فایل رمزدار: <code>/pass رمز</code>",
+].join("\n");
+
+const START_KEYBOARD = {
+  keyboard: [[{ text: "/start" }]],
+  resize_keyboard: true,
+  is_persistent: true,
+};
 
 if (!TOKEN) {
   console.error("TELEGRAM_BOT_TOKEN is required");
@@ -25,7 +54,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.0",
+    version: "2.1",
     pantegnos: true,
   });
 });
@@ -89,6 +118,36 @@ async function startPolling() {
   }
 }
 
+async function sendWelcome(chatId) {
+  const sent = await sendMessage(TOKEN, chatId, WELCOME, {
+    reply_markup: START_KEYBOARD,
+  });
+  if (sent?.message_id) {
+    pinnedMsg.set(String(chatId), sent.message_id);
+    await pinMessage(TOKEN, chatId, sent.message_id);
+  }
+  return sent;
+}
+
+async function setStatus(chatId, text) {
+  const mid = pinnedMsg.get(String(chatId));
+  if (!mid) return;
+  await editMessage(TOKEN, chatId, mid, text, { reply_markup: START_KEYBOARD });
+}
+
+async function restoreWelcome(chatId) {
+  const mid = pinnedMsg.get(String(chatId));
+  if (!mid) return;
+  await editMessage(TOKEN, chatId, mid, WELCOME, { reply_markup: START_KEYBOARD });
+}
+
+async function sendResult(chatId, result) {
+  const parts = formatMessages(result);
+  for (const part of parts) {
+    await sendMessage(TOKEN, chatId, part);
+  }
+}
+
 async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
   if (!msg) return;
@@ -97,27 +156,7 @@ async function handleUpdate(update) {
 
   try {
     if (text === "/start" || text === "/help") {
-      await sendMessage(
-        TOKEN,
-        chatId,
-        [
-          "👋 <b>بات دیکریپت کانفیگ</b> (Railway)",
-          "",
-          "فایل یا متن کانفیگ را بفرست.",
-          "",
-          "<b>پشتیبانی کامل:</b>",
-          "• NPVS / NPVT / EHI / HC (Pantegnos)",
-          "• NetMod / SlipNet / V2Box",
-          "• OpenVPN / AmneziaWG / Argo / Rocket",
-          "• لینک vless / trojan / ss",
-          "",
-          "<b>دستورات:</b>",
-          "/pass رمز — برای فایل‌های رمزدار",
-          "/help",
-          "",
-          "خروجی: VLESS (اگر بشود) + اطلاعات سرور",
-        ].join("\n")
-      );
+      await sendWelcome(chatId);
       return;
     }
 
@@ -135,25 +174,42 @@ async function handleUpdate(update) {
     const password = pendingPass.get(String(chatId)) || null;
 
     if (msg.document) {
-      await sendMessage(TOKEN, chatId, "⏳ در حال پردازش...");
-      const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id);
-      const result = await openBytes(name, bytes, null, password);
-      await sendMessage(TOKEN, chatId, formatReply(result));
+      await setStatus(chatId, "⏳ در حال باز کردن فایل...");
+      try {
+        const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id);
+        const result = await openBytes(name, bytes, null, password);
+        await restoreWelcome(chatId);
+        await sendResult(chatId, result);
+      } catch (err) {
+        await restoreWelcome(chatId);
+        await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
+      }
       return;
     }
 
     if (text && !text.startsWith("/")) {
-      await sendMessage(TOKEN, chatId, "⏳ در حال پردازش...");
-      const bytes = new TextEncoder().encode(text);
-      const result = await openBytes("message.txt", bytes, text, password);
-      await sendMessage(TOKEN, chatId, formatReply(result));
+      await setStatus(chatId, "⏳ در حال باز کردن متن...");
+      try {
+        const bytes = new TextEncoder().encode(text);
+        const result = await openBytes("message.txt", bytes, text, password);
+        await restoreWelcome(chatId);
+        await sendResult(chatId, result);
+      } catch (err) {
+        await restoreWelcome(chatId);
+        await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
+      }
     }
   } catch (err) {
     console.error(err);
     try {
-      await sendMessage(TOKEN, chatId, `❌ خطا: <code>${String(err.message || err)}</code>`);
+      await restoreWelcome(chatId);
+      await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
     } catch {}
   }
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function sleep(ms) {

@@ -2,7 +2,7 @@ export function tgApi(token, method, body) {
   return fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body || {}),
   }).then(async (r) => {
     const j = await r.json();
     if (!j.ok) throw new Error(`Telegram ${method}: ${j.description || r.status}`);
@@ -23,6 +23,32 @@ export async function sendMessage(token, chatId, text, extra = {}) {
     });
   }
   return last;
+}
+
+export async function editMessage(token, chatId, messageId, text, extra = {}) {
+  try {
+    return await tgApi(token, "editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...extra,
+    });
+  } catch (e) {
+    // message not modified / deleted
+    return null;
+  }
+}
+
+export async function pinMessage(token, chatId, messageId) {
+  try {
+    await tgApi(token, "pinChatMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+      disable_notification: true,
+    });
+  } catch {}
 }
 
 export async function downloadFile(token, fileId) {

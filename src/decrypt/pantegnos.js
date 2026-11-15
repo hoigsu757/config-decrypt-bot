@@ -140,14 +140,19 @@ function parsePantegnosText(text, name, bytes) {
   if (r.vless) fillFromLink(r, r.vless);
   else if (r.links[0] && !r.server?.host) fillFromLink(r, r.links[0]);
 
+  // EHI / misc note from configMessage without dumping raw JSON
+  if (parsed && !Array.isArray(parsed) && parsed.configMessage && !r.note) {
+    r.note = String(parsed.configMessage).slice(0, 500);
+  }
+
   if (!r.links.length && !r.server?.host) {
     const msg = text
       .split("\n")
-      .filter((l) => !l.startsWith("//") && !l.includes("Saved to") && l.trim())
+      .filter((l) => !l.startsWith("//") && !l.includes("Saved to") && !l.trim().startsWith("{") && l.trim())
       .slice(0, 8)
       .join("\n")
       .slice(0, 300);
-    r.note = msg || "خروجی خالی از Pantegnos";
+    if (!r.note) r.note = msg || "خروجی خالی از Pantegnos";
   }
   return r;
 }
@@ -172,14 +177,57 @@ function profilesFrom(parsed) {
   const out = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    if (item.v2rayProfile || item.address || item.type) out.push(fromNpv(item));
-    else if (item.Common) {
+    if (item.v2rayProfile || item.address || item.type === "V2RAY" || item.type === "v2ray") {
+      out.push(fromNpv(item));
+    } else if (isEhi(item)) {
+      out.push(fromEhi(item));
+    } else if (item.Common) {
       const stub = emptyResult("x");
       applyCommon(stub, (item.Common || [])[0] || {});
       if (stub.server.host) out.push(stub.server);
     }
   }
   return out.filter((s) => s.host);
+}
+
+function isEhi(item) {
+  return Boolean(
+    item.payload !== undefined ||
+      item.remoteProxy ||
+      item.sniHostname ||
+      item.localPort !== undefined ||
+      (item.host && item.port && (item.user || item.password))
+  );
+}
+
+function fromEhi(item) {
+  let host = item.host || "";
+  let port = item.port != null ? String(item.port) : "";
+  if ((!host || !port) && item.remoteProxy) {
+    const m = String(item.remoteProxy).match(/^([^:]+):(\d+)$/);
+    if (m) {
+      host = host || m[1];
+      port = port || m[2];
+    }
+  }
+  const sni = item.sniHostname || item.sni || "";
+  let hostHeader = "";
+  const payload = item.payload || "";
+  const hm = String(payload).match(/Host:\s*([^\s\[\]\r\n]+)/i);
+  if (hm) hostHeader = hm[1];
+
+  return {
+    protocol: payload ? "ssh+payload" : "ssh",
+    host,
+    port,
+    user: item.user || item.username || undefined,
+    password: item.password || undefined,
+    sni: sni || undefined,
+    hostHeader: hostHeader || undefined,
+    payload: payload || undefined,
+    remoteProxy: item.remoteProxy || undefined,
+    remark: item.configMessage ? String(item.configMessage).split("\n")[0].slice(0, 80) : undefined,
+  };
 }
 
 function fromNpv(item) {
