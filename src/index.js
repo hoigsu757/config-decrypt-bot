@@ -11,8 +11,6 @@ const USE_POLLING = process.env.USE_POLLING === "1" || process.env.USE_POLLING =
 
 /** chatId -> password */
 const pendingPass = new Map();
-/** chatId -> pinned welcome message_id */
-const pinnedMsg = new Map();
 
 const WELCOME = [
   "👋 خوش اومدی",
@@ -54,7 +52,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.1",
+    version: "2.2",
     pantegnos: true,
   });
 });
@@ -118,27 +116,34 @@ async function startPolling() {
   }
 }
 
-async function sendWelcome(chatId) {
-  const sent = await sendMessage(TOKEN, chatId, WELCOME, {
-    reply_markup: START_KEYBOARD,
-  });
-  if (sent?.message_id) {
-    pinnedMsg.set(String(chatId), sent.message_id);
-    await pinMessage(TOKEN, chatId, sent.message_id);
+/** Status in the top pin bar, then delete so it doesn't stay in chat history. */
+async function showTopStatus(chatId, text) {
+  try {
+    const sent = await sendMessage(TOKEN, chatId, text);
+    if (sent?.message_id) {
+      await pinMessage(TOKEN, chatId, sent.message_id);
+      return sent.message_id;
+    }
+  } catch (e) {
+    console.error("showTopStatus", e.message);
   }
-  return sent;
+  return null;
 }
 
-async function setStatus(chatId, text) {
-  const mid = pinnedMsg.get(String(chatId));
-  if (!mid) return;
-  await editMessage(TOKEN, chatId, mid, text, { reply_markup: START_KEYBOARD });
-}
-
-async function restoreWelcome(chatId) {
-  const mid = pinnedMsg.get(String(chatId));
-  if (!mid) return;
-  await editMessage(TOKEN, chatId, mid, WELCOME, { reply_markup: START_KEYBOARD });
+async function clearTopStatus(chatId, messageId) {
+  if (!messageId) return;
+  try {
+    await tgApi(TOKEN, "unpinChatMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch {}
+  try {
+    await tgApi(TOKEN, "deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch {}
 }
 
 async function sendResult(chatId, result) {
@@ -156,7 +161,9 @@ async function handleUpdate(update) {
 
   try {
     if (text === "/start" || text === "/help") {
-      await sendWelcome(chatId);
+      await sendMessage(TOKEN, chatId, WELCOME, {
+        reply_markup: START_KEYBOARD,
+      });
       return;
     }
 
@@ -174,35 +181,34 @@ async function handleUpdate(update) {
     const password = pendingPass.get(String(chatId)) || null;
 
     if (msg.document) {
-      await setStatus(chatId, "⏳ در حال باز کردن فایل...");
+      const statusId = await showTopStatus(chatId, "⏳ در حال پردازش...");
       try {
         const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id);
         const result = await openBytes(name, bytes, null, password);
-        await restoreWelcome(chatId);
+        await clearTopStatus(chatId, statusId);
         await sendResult(chatId, result);
       } catch (err) {
-        await restoreWelcome(chatId);
+        await clearTopStatus(chatId, statusId);
         await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
       }
       return;
     }
 
     if (text && !text.startsWith("/")) {
-      await setStatus(chatId, "⏳ در حال باز کردن متن...");
+      const statusId = await showTopStatus(chatId, "⏳ در حال پردازش...");
       try {
         const bytes = new TextEncoder().encode(text);
         const result = await openBytes("message.txt", bytes, text, password);
-        await restoreWelcome(chatId);
+        await clearTopStatus(chatId, statusId);
         await sendResult(chatId, result);
       } catch (err) {
-        await restoreWelcome(chatId);
+        await clearTopStatus(chatId, statusId);
         await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
       }
     }
   } catch (err) {
     console.error(err);
     try {
-      await restoreWelcome(chatId);
       await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
     } catch {}
   }
