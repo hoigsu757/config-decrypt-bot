@@ -42,8 +42,19 @@ export async function trySlipnet(text, password) {
   // schema v28 positions
   r.server.protocol = fields[1] || "slipnet";
   r.server.remark = fields[2];
-  r.server.port = fields[8];
-  r.server.host = fields[9];
+  const domain = fields[3] || "";
+  const sshHost = fields[19] || "";
+  const sshPort = fields[17] || "";
+  const localHost = fields[9] || "";
+  const loop = (h) => ["", "127.0.0.1", "localhost", "::1", "0.0.0.0"].includes(String(h || "").trim().toLowerCase());
+  r.server.host = !loop(sshHost) ? sshHost : (domain || sshHost || localHost);
+  r.server.port = sshPort || fields[8];
+  if (domain) r.server.sni = domain;
+  const bits = [];
+  if (domain) bits.push("دامنه: " + domain);
+  if (sshHost) bits.push("SSH داخل تونل: " + sshHost + ":" + (sshPort || "22"));
+  if (localHost) bits.push("SOCKS محلی: " + localHost + ":" + (fields[8] || "1080"));
+  r.note = bits.join(" | ");
   // later fields for VLESS if present (schema dependent)
   for (let i = 0; i < fields.length; i++) {
     const v = fields[i];
