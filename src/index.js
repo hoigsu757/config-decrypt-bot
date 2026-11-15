@@ -52,7 +52,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.2",
+    version: "2.3",
     pantegnos: true,
   });
 });
@@ -116,34 +116,16 @@ async function startPolling() {
   }
 }
 
-/** Status in the top pin bar, then delete so it doesn't stay in chat history. */
-async function showTopStatus(chatId, text) {
+/** Telegram typing indicator at top — no message in chat history. */
+async function pulseTyping(chatId) {
   try {
-    const sent = await sendMessage(TOKEN, chatId, text);
-    if (sent?.message_id) {
-      await pinMessage(TOKEN, chatId, sent.message_id);
-      return sent.message_id;
-    }
-  } catch (e) {
-    console.error("showTopStatus", e.message);
-  }
-  return null;
+    await tgApi(TOKEN, "sendChatAction", { chat_id: chatId, action: "typing" });
+  } catch {}
 }
 
-async function clearTopStatus(chatId, messageId) {
-  if (!messageId) return;
-  try {
-    await tgApi(TOKEN, "unpinChatMessage", {
-      chat_id: chatId,
-      message_id: messageId,
-    });
-  } catch {}
-  try {
-    await tgApi(TOKEN, "deleteMessage", {
-      chat_id: chatId,
-      message_id: messageId,
-    });
-  } catch {}
+function startTypingLoop(chatId) {
+  pulseTyping(chatId);
+  return setInterval(() => pulseTyping(chatId), 4000);
 }
 
 async function sendResult(chatId, result) {
@@ -181,28 +163,28 @@ async function handleUpdate(update) {
     const password = pendingPass.get(String(chatId)) || null;
 
     if (msg.document) {
-      const statusId = await showTopStatus(chatId, "⏳ در حال پردازش...");
+      const typing = startTypingLoop(chatId);
       try {
         const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id);
         const result = await openBytes(name, bytes, null, password);
-        await clearTopStatus(chatId, statusId);
+        clearInterval(typing);
         await sendResult(chatId, result);
       } catch (err) {
-        await clearTopStatus(chatId, statusId);
+        clearInterval(typing);
         await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
       }
       return;
     }
 
     if (text && !text.startsWith("/")) {
-      const statusId = await showTopStatus(chatId, "⏳ در حال پردازش...");
+      const typing = startTypingLoop(chatId);
       try {
         const bytes = new TextEncoder().encode(text);
         const result = await openBytes("message.txt", bytes, text, password);
-        await clearTopStatus(chatId, statusId);
+        clearInterval(typing);
         await sendResult(chatId, result);
       } catch (err) {
-        await clearTopStatus(chatId, statusId);
+        clearInterval(typing);
         await sendMessage(TOKEN, chatId, `❌ خطا: <code>${esc(String(err.message || err))}</code>`);
       }
     }
