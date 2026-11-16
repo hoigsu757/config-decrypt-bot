@@ -3,6 +3,7 @@ import { sendMessage, downloadFile, tgApi } from "./telegram/api.js";
 import { openBytes } from "./decrypt/open.js";
 import { formatMessages } from "./decrypt/format.js";
 import { rebrandConfig } from "./decrypt/rebrand.js";
+import { fetchFreeConfigs } from "./free/configs.js";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = Number(process.env.PORT || 3000);
@@ -44,9 +45,27 @@ const WELCOME = [
 ].join("\n");
 
 const START_KEYBOARD = {
-  keyboard: [[{ text: "/start" }]],
+  keyboard: [[{ text: "/start" }, { text: "دریافت کانفیگ" }]],
   resize_keyboard: true,
   is_persistent: true,
+};
+
+const GET_CONFIG_KEYBOARD = {
+  inline_keyboard: [
+    [
+      { text: "VLESS رایگان", callback_data: "free:vless" },
+      { text: "Shadowsocks", callback_data: "free:ss" },
+    ],
+    [
+      { text: "Trojan", callback_data: "free:trojan" },
+      { text: "OpenVPN", callback_data: "free:ovpn" },
+    ],
+    [
+      { text: "SSTP عمومی", callback_data: "free:sstp" },
+      { text: "Tor Bridge", callback_data: "free:tor" },
+    ],
+    [{ text: "WireGuard", callback_data: "free:wg" }],
+  ],
 };
 
 const ACTION_KEYBOARD = {
@@ -71,7 +90,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.4",
+    version: "2.5",
     pantegnos: true,
   });
 });
@@ -172,6 +191,31 @@ async function handleCallback(cq) {
     await tgApi(TOKEN, "answerCallbackQuery", { callback_query_id: cq.id });
   } catch {}
 
+  // free public configs — no pending file required
+  if (data.startsWith("free:")) {
+    const type = data.slice(5);
+    const typing = startTypingLoop(chatId);
+    try {
+      const res = await fetchFreeConfigs(type, 5);
+      clearInterval(typing);
+      await sendMessage(TOKEN, chatId, `📥 ${esc(res.message)}`);
+      for (const item of res.items || []) {
+        if (item.filename && item.text) {
+          await sendDocument(chatId, item.filename, item.text);
+        } else if (item.text) {
+          const body = item.title
+            ? `<b>${esc(item.title)}</b>\n<code>${esc(item.text)}</code>`
+            : `<code>${esc(item.text)}</code>`;
+          await sendMessage(TOKEN, chatId, body);
+        }
+      }
+    } catch (err) {
+      clearInterval(typing);
+      await sendMessage(TOKEN, chatId, `❌ خطا در دریافت: <code>${esc(String(err.message || err))}</code>`);
+    }
+    return;
+  }
+
   const job = pendingJob.get(String(chatId));
   if (!job) {
     await sendMessage(TOKEN, chatId, "لطفاً دوباره فایل را بفرست.");
@@ -258,6 +302,16 @@ async function handleUpdate(update) {
     if (text === "/start" || text === "/help") {
       waitingName.delete(String(chatId));
       await sendMessage(TOKEN, chatId, WELCOME, { reply_markup: START_KEYBOARD });
+      return;
+    }
+
+    if (text === "دریافت کانفیگ" || text === "/get" || text === "/free") {
+      await sendMessage(
+        TOKEN,
+        chatId,
+        "📦 یک نوع کانفیگ رایگان/عمومی انتخاب کن:\n\n⚠️ ممکن است بعضی‌ها قطع باشند.",
+        { reply_markup: GET_CONFIG_KEYBOARD }
+      );
       return;
     }
 
