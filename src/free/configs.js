@@ -3,16 +3,6 @@
  */
 const UA = "config-decrypt-bot/2.5";
 
-export const FREE_TYPES = [
-  { id: "vless", title: "VLESS رایگان" },
-  { id: "ss", title: "Shadowsocks" },
-  { id: "trojan", title: "Trojan" },
-  { id: "ovpn", title: "OpenVPN" },
-  { id: "sstp", title: "SSTP عمومی" },
-  { id: "tor", title: "Tor Bridge" },
-  { id: "wg", title: "WireGuard" },
-];
-
 export async function fetchFreeConfigs(type, limit = 5) {
   switch (type) {
     case "ovpn":
@@ -30,7 +20,8 @@ export async function fetchFreeConfigs(type, limit = 5) {
     case "wg":
       return {
         ok: false,
-        message: "منبع عمومی پایدار برای WireGuard/Amnezia پیدا نشد.\nاز کانال‌های عمومی یا فایل خودت استفاده کن.",
+        message:
+          "منبع عمومی پایدار برای WireGuard/Amnezia پیدا نشد.\nاز کانال‌های عمومی یا فایل خودت استفاده کن.",
         items: [],
       };
     default:
@@ -38,19 +29,25 @@ export async function fetchFreeConfigs(type, limit = 5) {
   }
 }
 
-async function fetchText(url, timeoutMs = 15000) {
+async function fetchText(url, timeoutMs = 18000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { "user-agent": UA, accept: "*/*" },
       signal: ctrl.signal,
+      redirect: "follow",
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
   } finally {
     clearTimeout(t);
   }
+}
+
+function b64ToUtf8(s) {
+  const clean = String(s).replace(/\s+/g, "");
+  return Buffer.from(clean, "base64").toString("utf8");
 }
 
 async function fetchVpnGateServers() {
@@ -62,16 +59,34 @@ async function fetchVpnGateServers() {
     try {
       const text = await fetchText(url);
       const data = JSON.parse(text);
-      const list = Array.isArray(data) ? data : data.servers || data.data || [];
+      const list = Array.isArray(data) ? data : data.servers || [];
       if (list.length) return list;
-    } catch {}
+    } catch (e) {
+      console.error("vpngate json", url, e.message);
+    }
   }
   try {
-    const csv = await fetchText("http://www.vpngate.net/api/iphone/");
+    const csv = await fetchText("https://www.vpngate.net/api/iphone/");
     return parseVpnGateCsv(csv);
-  } catch {
+  } catch (e) {
+    console.error("vpngate csv", e.message);
     return [];
   }
+}
+
+function normalizeServer(s) {
+  return {
+    hostname: s.hostname || s.HostName || "",
+    ip: s.ip || s.IP || "",
+    score: Number(s.score ?? s.Score ?? 0),
+    country: s.country_code || s.CountryShort || s.country || "?",
+    openvpn_b64:
+      s.openvpn_config_base64 ||
+      s.OpenVPN_ConfigData_Base64 ||
+      s.openvpn_config ||
+      s.config ||
+      "",
+  };
 }
 
 function parseVpnGateCsv(csv) {
@@ -111,25 +126,23 @@ function splitCsv(line) {
 }
 
 async function fetchVpnGateOpenvpn(limit) {
-  const servers = await fetchVpnGateServers();
+  const servers = (await fetchVpnGateServers()).map(normalizeServer);
   if (!servers.length) {
     return { ok: false, message: "لیست VPN Gate در دسترس نیست.", items: [] };
   }
-  const sorted = [...servers].sort((a, b) => (Number(b.Score) || 0) - (Number(a.Score) || 0));
+  const sorted = [...servers].sort((a, b) => b.score - a.score);
   const items = [];
   for (const s of sorted) {
     if (items.length >= limit) break;
-    const b64 = s.OpenVPN_ConfigData_Base64 || s.openvpn_config || s.config;
-    if (!b64) continue;
+    if (!s.openvpn_b64) continue;
     try {
-      const conf = Buffer.from(String(b64).replace(/\s+/g, ""), "base64").toString("utf8");
-      if (!/client|remote\s+/i.test(conf)) continue;
-      const country = s.CountryShort || s.country || "?";
-      const host = s.IP || s.ip || s.HostName || "server";
+      const conf = b64ToUtf8(s.openvpn_b64);
+      if (!/remote\s+\S+/i.test(conf) && !/client/i.test(conf)) continue;
+      const host = s.ip || s.hostname || "server";
       items.push({
-        title: `OpenVPN ${country} ${host}`,
+        title: `OpenVPN ${s.country} ${host}`,
         text: conf,
-        filename: `vpngate-${country}-${String(host).replace(/[^\w.-]/g, "_")}.ovpn`,
+        filename: `vpngate-${s.country}-${String(host).replace(/[^\w.-]/g, "_")}.ovpn`,
       });
     } catch {}
   }
@@ -141,29 +154,29 @@ async function fetchVpnGateOpenvpn(limit) {
 }
 
 async function fetchVpnGateSstp(limit) {
-  const servers = await fetchVpnGateServers();
+  const servers = (await fetchVpnGateServers()).map(normalizeServer);
   if (!servers.length) {
     return { ok: false, message: "لیست VPN Gate در دسترس نیست.", items: [] };
   }
-  const sorted = [...servers].sort((a, b) => (Number(b.Score) || 0) - (Number(a.Score) || 0));
+  const sorted = [...servers].sort((a, b) => b.score - a.score);
   const items = [];
   for (const s of sorted) {
     if (items.length >= limit) break;
-    const host = s.HostName || s.hostname || s.IP || s.ip;
+    const host = s.hostname || s.ip;
     if (!host) continue;
-    const country = s.CountryShort || s.country || "?";
     const text = [
-      `# SSTP free — VPN Gate ${country}`,
+      `# SSTP free — VPN Gate ${s.country}`,
       `Server: ${host}`,
+      `IP: ${s.ip || "-"}`,
       `Port: 443`,
       `Protocol: SSTP`,
       `Username: vpn`,
       `Password: vpn`,
-      ``,
+      "",
       `# Windows: Add VPN → SSTP → ${host}`,
       `# user/pass: vpn / vpn`,
     ].join("\n");
-    items.push({ title: `SSTP ${country} ${host}`, text });
+    items.push({ title: `SSTP ${s.country} ${host}`, text });
   }
   return {
     ok: items.length > 0,
@@ -175,35 +188,48 @@ async function fetchVpnGateSstp(limit) {
 }
 
 const SUB_SOURCES = [
-  "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
   "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge_base64.txt",
-  "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_base64_Sub.txt",
+  "https://cdn.jsdelivr.net/gh/mahdibland/V2RayAggregator@master/sub/sub_merge_base64.txt",
+  "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
+  "https://raw.githubusercontent.com/freefq/free/master/v2",
 ];
 
 async function fetchShareLinks(kind, limit) {
   const found = [];
+  const re =
+    kind === "vless"
+      ? /vless:\/\/[^\s<>"']+/gi
+      : kind === "ss"
+        ? /(?<![\w])ss:\/\/[^\s<>"']+/gi
+        : /trojan:\/\/[^\s<>"']+/gi;
+
   for (const url of SUB_SOURCES) {
     if (found.length >= limit) break;
     try {
       let body = await fetchText(url);
-      if (!/vless:\/\/|ss:\/\/|trojan:\/\//i.test(body)) {
+      // try as plain text first; if no links, decode as base64 subscription
+      if (!/vless:\/\/|ss:\/\/|trojan:\/\/|vmess:\/\//i.test(body)) {
         try {
-          body = Buffer.from(body.replace(/\s+/g, ""), "base64").toString("utf8");
+          body = b64ToUtf8(body);
+        } catch {}
+      } else if (!new RegExp(kind === "ss" ? "ss://" : `${kind}://`, "i").test(body)) {
+        // might still be double-encoded
+        try {
+          const decoded = b64ToUtf8(body);
+          if (decoded.includes("://")) body = decoded;
         } catch {}
       }
-      const re =
-        kind === "vless"
-          ? /vless:\/\/[^\s<>"']+/gi
-          : kind === "ss"
-            ? /ss:\/\/[^\s<>"']+/gi
-            : /trojan:\/\/[^\s<>"']+/gi;
       const matches = body.match(re) || [];
       for (const link of matches) {
         if (found.length >= limit) break;
-        if (!found.includes(link)) found.push(link);
+        const clean = link.replace(/[),;]+$/, "");
+        if (!found.includes(clean)) found.push(clean);
       }
-    } catch {}
+    } catch (e) {
+      console.error("sub", url, e.message);
+    }
   }
+
   return {
     ok: found.length > 0,
     message: found.length
@@ -214,16 +240,22 @@ async function fetchShareLinks(kind, limit) {
 }
 
 async function fetchTorBridges(limit) {
+  const sources = [
+    "https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-obfs4",
+    "https://cdn.jsdelivr.net/gh/scriptzteam/Tor-Bridges-Collector@main/bridges-obfs4",
+  ];
   const items = [];
-  try {
-    const body = await fetchText(
-      "https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-obfs4"
-    );
-    const lines = body.split(/\r?\n/).filter((l) => /^obfs4\s+/i.test(l.trim()));
-    for (const line of lines.slice(0, limit)) {
-      items.push({ title: "Tor obfs4", text: line.trim() });
-    }
-  } catch {}
+  for (const url of sources) {
+    if (items.length >= limit) break;
+    try {
+      const body = await fetchText(url);
+      const lines = body.split(/\r?\n/).filter((l) => /^obfs4\s+/i.test(l.trim()));
+      for (const line of lines) {
+        if (items.length >= limit) break;
+        items.push({ title: "Tor obfs4", text: line.trim() });
+      }
+    } catch {}
+  }
   if (!items.length) {
     return {
       ok: false,
