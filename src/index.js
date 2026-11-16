@@ -33,7 +33,8 @@ const WELCOME = [
   "• V2Box",
   "• OpenVPN / AmneziaWG",
   "• ArgoVPN / Rocket Tunnel",
-  "• لینک vless / trojan / ss",
+  "• Tor Bridge (obfs4 / snowflake)
+  • لینک vless / trojan / ss",
   "",
   "بعد از دریافت فایل دو گزینه می‌بینی:",
   "🔓 باز کردن — اطلاعات سرور",

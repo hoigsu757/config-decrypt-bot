@@ -57,7 +57,9 @@ export function formatMessages(r) {
 
   for (const l of links) {
     if (l === r.vless) continue;
-    const kind = l.split("://")[0].toUpperCase();
+    let kind = "لینک";
+    if (/:\/\//.test(l)) kind = l.split("://")[0].toUpperCase();
+    else if (/^(obfs4|snowflake|meek|webtunnel)\b/i.test(l)) kind = l.split(/\s+/)[0].toUpperCase();
     msgs.push(`🔗 <b>${esc(kind)}</b>\n<code>${esc(l)}</code>`);
   }
 
@@ -105,6 +107,8 @@ function serverRows(s) {
     ["FP", s.fp],
     ["Flow", s.flow],
     ["Mode", s.mode],
+    ["Fingerprint", s.fingerprint],
+    ["Cert", s.cert],
     ["Remark", s.remark],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
 }

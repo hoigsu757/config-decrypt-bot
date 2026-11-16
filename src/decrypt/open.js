@@ -7,6 +7,7 @@ import { trySlipnet } from "./slipnet.js";
 import { tryNetmod } from "./netmod.js";
 import { tryV2box } from "./v2box.js";
 import { tryPantegnos } from "./pantegnos.js";
+import { tryTor } from "./tor.js";
 import { emptyResult } from "./format.js";
 
 function isHeavy(name, bytes) {
@@ -41,6 +42,7 @@ export async function openBytes(name, bytes, textHint, password) {
     () => tryAmnezia(text),
     () => tryArgo(text),
     () => tryRocket(name, text),
+    () => tryTor(text),
     () => trySlipnet(text, password),
     () => tryNetmod(name, text),
   ];

@@ -100,6 +100,16 @@ export async function rebrandConfig(result, originalText, newName) {
     }
   }
 
+  // Tor bridges
+  if (fmt.includes("tor") || result._torBridges?.length || /\bobfs4\s+\S+:\d+/i.test(text)) {
+    const bridges = result._torBridges || result.links?.filter((l) => /\bobfs4\b|\bsnowflake\b|\bwebtunnel\b/i.test(l)) || [];
+    if (bridges.length) {
+      const { formatTorrc } = await import("./tor.js");
+      add(formatTorrc(bridges, name));
+      for (const b of bridges) add(b);
+    }
+  }
+
   // ArgoVPN Bridge: keep original signed block (app verifies signature)
   if (fmt.includes("argo") || /BEGIN ARGO VPN BRIDGE BLOCK/i.test(text)) {
     const m = text.match(/-----BEGIN ARGO VPN BRIDGE BLOCK-----[\s\S]*?-----END ARGO VPN BRIDGE BLOCK-----/i);
