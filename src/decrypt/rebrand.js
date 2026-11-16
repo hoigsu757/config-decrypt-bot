@@ -78,17 +78,26 @@ export async function rebrandConfig(result, originalText, newName) {
 
   if (isSshLike && result.server?.host) {
     const s = result.server;
-    const lines = [
-      `# ${name}`,
-      `protocol: ${s.protocol || "ssh"}`,
-      `host: ${s.host}`,
-      s.port ? `port: ${s.port}` : null,
-      s.user ? `user: ${s.user}` : null,
-      s.password ? `password: ${s.password}` : null,
-      s.sni ? `sni: ${s.sni}` : null,
-      s.payload ? `payload: ${s.payload}` : null,
-    ].filter(Boolean);
-    add(lines.join("\n"));
+    // Rocket: rebuild importable rcktnl.site link
+    if (fmt.includes("rocket") || /rcktnl\.site\/i\//i.test(text)) {
+      try {
+        const { buildRocketUrl } = await import("./rocket.js");
+        const url = await buildRocketUrl(s, { remark: name });
+        add(url);
+      } catch {}
+    } else {
+      const lines = [
+        `# ${name}`,
+        `protocol: ${s.protocol || "ssh"}`,
+        `host: ${s.host}`,
+        s.port ? `port: ${s.port}` : null,
+        s.user ? `user: ${s.user}` : null,
+        s.password ? `password: ${s.password}` : null,
+        s.sni ? `sni: ${s.sni}` : null,
+        s.payload ? `payload: ${s.payload}` : null,
+      ].filter(Boolean);
+      add(lines.join("\n"));
+    }
   }
 
   // Build share links only when protocol is actually that type
