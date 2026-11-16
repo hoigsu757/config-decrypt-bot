@@ -1,4 +1,5 @@
 import { b64encode, b64decode, hexToBytes, utf8Encode, aesGcmEncrypt, aesGcmDecrypt, utf8 } from "../crypto/util.js";
+import { buildVless, buildTrojan, buildSs } from "./format.js";
 
 const SLIP_KEY = hexToBytes("214F052025B2F949605A5429EC3D5FA80C2022C168AD946E68852D447214DBD3");
 
@@ -12,23 +13,23 @@ export async function rebrandConfig(result, originalText, newName) {
   if (!name) return out;
 
   const text = originalText || "";
-
-  // Share links: rewrite #remark
-  const linkRe = /(vless|vmess|trojan|ss|ssr|hysteria2|hy2):\/\/[^\s"'<>]+/gi;
-  const links = text.match(linkRe) || result.links || [];
   const seen = new Set();
-  for (const raw of links) {
-    let l = raw;
+  const add = (t) => {
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.texts.push(t);
+  };
+
+  // Existing share links only: rewrite #remark (never invent protocol)
+  const linkRe = /(vless|vmess|trojan|ss|ssr|hysteria2|hy2):\/\/[^\s"'<>]+/gi;
+  const fromText = text.match(linkRe) || [];
+  for (const raw of fromText) {
     try {
+      let l = raw;
       const hash = l.indexOf("#");
       if (hash >= 0) l = l.slice(0, hash);
-      l = `${l}#${encodeURIComponent(name)}`;
-    } catch {
-      continue;
-    }
-    if (seen.has(l)) continue;
-    seen.add(l);
-    out.texts.push(l);
+      add(`${l}#${encodeURIComponent(name)}`);
+    } catch {}
   }
 
   // SlipNet encrypted
@@ -46,61 +47,87 @@ export async function rebrandConfig(result, originalText, newName) {
       packed[0] = data[0] || 1;
       packed.set(nonce, 1);
       packed.set(ct, 13);
-      out.texts.push(`slipnet-enc://${b64encode(packed)}`);
+      add(`slipnet-enc://${b64encode(packed)}`);
     } catch {}
   }
 
-  // plain slipnet://
   const slipPlain = text.match(/slipnet:\/\/([^\s]+)/i);
   if (slipPlain && !slip) {
     try {
       const fields = decodeURIComponent(slipPlain[1]).split("|");
       if (fields.length > 2) fields[2] = name.replace(/\|/g, "/");
-      out.texts.push(`slipnet://${encodeURIComponent(fields.join("|"))}`);
+      add(`slipnet://${encodeURIComponent(fields.join("|"))}`);
     } catch {}
   }
 
-  // OpenVPN: rewrite comments / filename tag
-  if (/client\s*$/im.test(text) && /remote\s+\S+/i.test(text)) {
+  // OpenVPN
+  if (/^\s*client\b/im.test(text) && /\bremote\s+\S+/i.test(text)) {
     let ovpn = text.replace(/^#.*$/gm, "").trim();
     ovpn = `# ${name}\n${ovpn}`;
     out.files.push({ name: `${safeFile(name)}.ovpn`, content: ovpn });
   }
 
-  // From decrypted server → vless/trojan/ss with new remark
-  if (result.server?.host) {
-    const s = { ...result.server, remark: name };
-    const { buildVless, buildTrojan, buildSs } = await import("./format.js");
-    for (const fn of [buildVless, buildTrojan, buildSs]) {
-      try {
-        const link = fn(s);
-        if (link && !seen.has(link)) {
-          seen.add(link);
-          out.texts.push(link);
-        }
-      } catch {}
+  // Rocket / SSH-style: keep as labeled text, do NOT fake trojan/vless
+  const fmt = String(result.format || "").toLowerCase();
+  const proto = String(result.server?.protocol || "").toLowerCase();
+  const isSshLike =
+    fmt.includes("rocket") ||
+    proto.includes("ssh") ||
+    proto === "ssh+payload" ||
+    proto === "ssh_direct";
+
+  if (isSshLike && result.server?.host) {
+    const s = result.server;
+    const lines = [
+      `# ${name}`,
+      `protocol: ${s.protocol || "ssh"}`,
+      `host: ${s.host}`,
+      s.port ? `port: ${s.port}` : null,
+      s.user ? `user: ${s.user}` : null,
+      s.password ? `password: ${s.password}` : null,
+      s.sni ? `sni: ${s.sni}` : null,
+      s.payload ? `payload: ${s.payload}` : null,
+    ].filter(Boolean);
+    add(lines.join("\n"));
+  }
+
+  // Build share links only when protocol is actually that type
+  const servers = Array.isArray(result.servers) && result.servers.length
+    ? result.servers
+    : result.server?.host
+      ? [result.server]
+      : [];
+
+  for (const srv of servers) {
+    const s = { ...srv, remark: name };
+    const p = String(s.protocol || "").toLowerCase();
+    if (p === "vless" || s.uuid) {
+      const link = buildVless({ ...s, protocol: "vless", uuid: s.uuid });
+      if (link) add(link);
+    } else if (p === "trojan") {
+      const link = buildTrojan(s);
+      if (link) add(link);
+    } else if (p === "ss" || s.method) {
+      const link = buildSs(s);
+      if (link) add(link);
     }
   }
 
-  // Multiple servers
-  if (Array.isArray(result.servers)) {
-    const { buildVless, buildTrojan, buildSs } = await import("./format.js");
-    for (const srv of result.servers) {
-      const s = { ...srv, remark: name };
-      for (const fn of [buildVless, buildTrojan, buildSs]) {
-        try {
-          const link = fn(s);
-          if (link && !seen.has(link)) {
-            seen.add(link);
-            out.texts.push(link);
-          }
-        } catch {}
-      }
-    }
+  // Result links that were produced by decrypt (vless/ss/...)
+  for (const l of result.links || []) {
+    if (!/^(vless|vmess|trojan|ss|ssr|hysteria2|hy2):\/\//i.test(l)) continue;
+    try {
+      let x = l;
+      const hash = x.indexOf("#");
+      if (hash >= 0) x = x.slice(0, hash);
+      add(`${x}#${encodeURIComponent(name)}`);
+    } catch {}
   }
 
   if (!out.texts.length && !out.files.length) {
-    out.texts.push(`# ${name}\n# فرمت ${result.format} قابل تبدیل خودکار نیست (مثل NPVS).\n# فقط اطلاعات سرور را با نام جدید نگه دار.`);
+    add(
+      `# ${name}\n# فرمت «${result.format || "unknown"}» قابل تبدیل خودکار به لینک قابل‌اشتراک نیست.\n# از دکمه «باز کردن» اطلاعات سرور را ببین.`
+    );
   }
 
   return out;
