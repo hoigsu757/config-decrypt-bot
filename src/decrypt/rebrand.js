@@ -72,6 +72,18 @@ export async function rebrandConfig(result, originalText, newName) {
   const fmt = String(result.format || "").toLowerCase();
   const proto = String(result.server?.protocol || "").toLowerCase();
 
+  // Telegram MTProto proxy
+  if (fmt.includes("telegram proxy") || proto === "mtproto" || /t\.me\/proxy\?/i.test(text) || /tg:\/\/proxy\?/i.test(text)) {
+    try {
+      const { buildTgProxyLink } = await import("./tgproxy.js");
+      const s = result.server || {};
+      if (s.host && s.port && s.password) {
+        add(`# ${name}\n${buildTgProxyLink(s.host, s.port, s.password)}`);
+      }
+    } catch {}
+  }
+
+
   // WireGuard URI rebuild
   if ((fmt.includes("wireguard") || proto === "wireguard" || /wireguard:\/\//i.test(text)) && result.server?.privateKey) {
     try {

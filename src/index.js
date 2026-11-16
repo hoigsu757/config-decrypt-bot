@@ -4,7 +4,6 @@ import { openBytes } from "./decrypt/open.js";
 import { formatMessages } from "./decrypt/format.js";
 import { rebrandConfig } from "./decrypt/rebrand.js";
 import { fetchFreeConfigs } from "./free/configs.js";
-import { scanApk, formatApkFindings } from "./apk/scan.js";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = Number(process.env.PORT || 3000);
@@ -20,8 +19,6 @@ const pendingJob = new Map();
 const waitingName = new Map();
 /** chatId -> { type, items, offset } free-config pagination */
 const freeSession = new Map();
-/** chatId -> true when waiting for APK */
-const waitingApk = new Map();
 
 const WELCOME = [
   "👋 خوش اومدی",
@@ -40,6 +37,7 @@ const WELCOME = [
   "• OpenVPN / AmneziaWG",
   "• ArgoVPN / Rocket Tunnel",
   "• Tor Bridge (obfs4 / snowflake)",
+  "• پروکسی تلگرام (t.me/proxy)",
   "• لینک vless / trojan / ss",
   "",
   "بعد از دریافت فایل دو گزینه می‌بینی:",
@@ -50,10 +48,7 @@ const WELCOME = [
 ].join("\n");
 
 const START_KEYBOARD = {
-  keyboard: [
-    [{ text: "/start" }, { text: "دریافت کانفیگ" }],
-    [{ text: "باز کردن اپ" }],
-  ],
+  keyboard: [[{ text: "/start" }, { text: "دریافت کانفیگ" }]],
   resize_keyboard: true,
   is_persistent: true,
 };
@@ -98,7 +93,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.7",
+    version: "2.8",
     pantegnos: true,
   });
 });
@@ -409,7 +404,6 @@ async function handleUpdate(update) {
     }
 
     if (text === "دریافت کانفیگ" || text === "/get" || text === "/free") {
-      waitingApk.delete(String(chatId));
       await sendMessage(
         TOKEN,
         chatId,
@@ -419,15 +413,6 @@ async function handleUpdate(update) {
       return;
     }
 
-    if (text === "باز کردن اپ" || text === "/apk") {
-      waitingApk.set(String(chatId), true);
-      await sendMessage(
-        TOKEN,
-        chatId,
-        "📱 فایل <b>APK</b> برنامه VPN را بفرست.\n\nداخلش می‌گردم برای:\n• vless / trojan / ss / vmess\n• OpenVPN / WireGuard\n• Tor / Rocket / SlipNet / Argo\n• لینک ساب و Host:Port"
-      );
-      return;
-    }
 
     if (text.startsWith("/pass")) {
       const pw = text.replace(/^\/pass(@\w+)?\s*/, "").trim();
@@ -452,29 +437,6 @@ async function handleUpdate(update) {
       const typing = startTypingLoop(chatId);
       try {
         const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id, msg.document.file_size);
-        const isApk =
-          waitingApk.get(String(chatId)) ||
-          /\.apk$/i.test(name || "") ||
-          (msg.document.file_name && /\.apk$/i.test(msg.document.file_name)) ||
-          msg.document.mime_type === "application/vnd.android.package-archive";
-
-        if (isApk) {
-          waitingApk.delete(String(chatId));
-          if (bytes.length > 55 * 1024 * 1024) {
-            clearInterval(typing);
-            await sendMessage(TOKEN, chatId, "حجم APK زیاد است (حد ۵۵MB).");
-            return;
-          }
-          const findings = await scanApk(name, bytes);
-          clearInterval(typing);
-          const { chunks, decrypted } = formatApkFindings(findings, name);
-          for (const c of chunks) await sendMessage(TOKEN, chatId, c);
-          for (const r of decrypted.slice(0, 8)) {
-            await offerActions(chatId, r, "", name);
-          }
-          return;
-        }
-
         const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
         const result = await openBytes(name, bytes, rawText, password);
         clearInterval(typing);

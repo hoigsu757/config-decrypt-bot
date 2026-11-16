@@ -8,6 +8,7 @@ import { tryNetmod } from "./netmod.js";
 import { tryV2box } from "./v2box.js";
 import { tryPantegnos } from "./pantegnos.js";
 import { tryTor } from "./tor.js";
+import { tryTgProxy } from "./tgproxy.js";
 import { emptyResult } from "./format.js";
 
 function isHeavy(name, bytes) {
@@ -36,6 +37,7 @@ export async function openBytes(name, bytes, textHint, password) {
   }
 
   const order = [
+    () => tryTgProxy(text),
     () => tryShareLink(text),
     () => tryV2box(name, text, password),
     () => tryOvpn(name, text),
