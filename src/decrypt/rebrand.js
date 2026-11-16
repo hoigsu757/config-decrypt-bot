@@ -100,7 +100,27 @@ export async function rebrandConfig(result, originalText, newName) {
     }
   }
 
+  // ArgoVPN Bridge: keep original signed block (app verifies signature)
+  if (fmt.includes("argo") || /BEGIN ARGO VPN BRIDGE BLOCK/i.test(text)) {
+    const m = text.match(/-----BEGIN ARGO VPN BRIDGE BLOCK-----[\s\S]*?-----END ARGO VPN BRIDGE BLOCK-----/i);
+    const block = result._argoRawBlock || (m && m[0]) || null;
+    if (block) {
+      add(`# ${name}\n${block}`);
+    } else {
+      try {
+        const { buildArgoBlock } = await import("./argo.js");
+        const block2 = await buildArgoBlock(result.server || {}, {
+          remark: name,
+          signature: result._argoOuter?.signature || "",
+          version: result._argoOuter?.version || 1,
+        });
+        add(`# ${name}\n${block2}`);
+      } catch {}
+    }
+  }
+
   // WireGuard / AmneziaWG: full .conf with name comment (never fake vless)
+
   const isWg =
     fmt.includes("wireguard") ||
     fmt.includes("amnezia") ||
