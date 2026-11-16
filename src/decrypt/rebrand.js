@@ -100,7 +100,22 @@ export async function rebrandConfig(result, originalText, newName) {
     }
   }
 
+  // WireGuard / AmneziaWG: full .conf with name comment (never fake vless)
+  const isWg =
+    fmt.includes("wireguard") ||
+    fmt.includes("amnezia") ||
+    proto.includes("wireguard") ||
+    proto.includes("amnezia") ||
+    (/\[Interface\]/i.test(text) && /PrivateKey\s*=/i.test(text));
+  if (isWg && (/\[Interface\]/i.test(text) || result._rawConf)) {
+    let conf = (result._rawConf || text).replace(/^#.*$/gm, "").trim();
+    conf = `# ${name}\n${conf}`;
+    out.files.push({ name: `${safeFile(name)}.conf`, content: conf });
+    add(conf);
+  }
+
   // Build share links only when protocol is actually that type
+
   const servers = Array.isArray(result.servers) && result.servers.length
     ? result.servers
     : result.server?.host
@@ -110,16 +125,17 @@ export async function rebrandConfig(result, originalText, newName) {
   for (const srv of servers) {
     const s = { ...srv, remark: name };
     const p = String(s.protocol || "").toLowerCase();
-    if (p === "vless" || s.uuid) {
+    if (p === "vless" && s.uuid) {
       const link = buildVless({ ...s, protocol: "vless", uuid: s.uuid });
       if (link) add(link);
-    } else if (p === "trojan") {
+    } else if (p === "trojan" && s.password) {
       const link = buildTrojan(s);
       if (link) add(link);
-    } else if (p === "ss" || s.method) {
+    } else if ((p === "ss" || p === "shadowsocks") && s.method && s.password) {
       const link = buildSs(s);
       if (link) add(link);
     }
+    // never invent links for wireguard/amnezia/ssh from private keys
   }
 
   // Result links that were produced by decrypt (vless/ss/...)
