@@ -108,6 +108,10 @@ function serverRows(s) {
     ["Flow", s.flow],
     ["Mode", s.mode],
     ["Fingerprint", s.fingerprint],
+    ["MTU", s.mtu],
+    ["Keepalive", s.keepalive],
+    ["PublicKey", s.password && s.protocol === "wireguard" ? s.password : null],
+    ["Address", s.protocol === "wireguard" ? s.user : null],
     ["Cert", s.cert],
     ["Remark", s.remark],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");

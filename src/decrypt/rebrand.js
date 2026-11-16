@@ -21,7 +21,7 @@ export async function rebrandConfig(result, originalText, newName) {
   };
 
   // Existing share links only: rewrite #remark (never invent protocol)
-  const linkRe = /(vless|vmess|trojan|ss|ssr|hysteria2|hy2):\/\/[^\s"'<>]+/gi;
+  const linkRe = /(vless|vmess|trojan|ss|ssr|hysteria2|hy2|wireguard):\/\/[^\s"'<>]+/gi;
   const fromText = text.match(linkRe) || [];
   for (const raw of fromText) {
     try {
@@ -33,6 +33,7 @@ export async function rebrandConfig(result, originalText, newName) {
   }
 
   // SlipNet encrypted
+
   const slip = text.match(/slipnet-enc:\/\/([A-Za-z0-9+/=]+)/i);
   if (slip) {
     try {
@@ -70,6 +71,18 @@ export async function rebrandConfig(result, originalText, newName) {
   // Rocket / SSH-style: keep as labeled text, do NOT fake trojan/vless
   const fmt = String(result.format || "").toLowerCase();
   const proto = String(result.server?.protocol || "").toLowerCase();
+
+  // WireGuard URI rebuild
+  if ((fmt.includes("wireguard") || proto === "wireguard" || /wireguard:\/\//i.test(text)) && result.server?.privateKey) {
+    try {
+      const { buildWireguardLink, buildWgConf } = await import("./sharelink.js");
+      const link = buildWireguardLink(result.server, name);
+      if (link) add(link);
+      const conf = buildWgConf({ ...result.server });
+      out.files.push({ name: `${safeFile(name)}.conf`, content: `# ${name}\n${conf}` });
+    } catch {}
+  }
+
   const isSshLike =
     fmt.includes("rocket") ||
     proto.includes("ssh") ||
