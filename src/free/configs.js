@@ -3,7 +3,7 @@
  */
 const UA = "config-decrypt-bot/2.5";
 
-export async function fetchFreeConfigs(type, limit = 5) {
+export async function fetchFreeConfigs(type, limit = 40) {
   switch (type) {
     case "ovpn":
       return fetchVpnGateOpenvpn(limit);

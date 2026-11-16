@@ -17,6 +17,8 @@ const pendingPass = new Map();
 const pendingJob = new Map();
 /** chatId -> true when waiting for rebrand name */
 const waitingName = new Map();
+/** chatId -> { type, items, offset } free-config pagination */
+const freeSession = new Map();
 
 const WELCOME = [
   "👋 خوش اومدی",
@@ -90,7 +92,7 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "config-decrypt-bot",
     platform: "railway",
-    version: "2.5",
+    version: "2.6",
     pantegnos: true,
   });
 });
@@ -183,6 +185,120 @@ async function offerActions(chatId, result, rawText, fileName) {
   );
 }
 
+
+const FREE_PAGE = 5;
+
+async function sendFreePage(chatId, session, notice) {
+  const { type, items, offset } = session;
+  const page = items.slice(offset, offset + FREE_PAGE);
+  if (!page.length) {
+    await sendMessage(TOKEN, chatId, "موردی برای نمایش نیست.");
+    return;
+  }
+  const end = Math.min(offset + page.length, items.length);
+  const header = notice || `📥 ${type.toUpperCase()} — ${offset + 1} تا ${end} از ${items.length}`;
+  await sendMessage(TOKEN, chatId, header);
+
+  for (const item of page) {
+    if (item.filename && item.text) {
+      await sendDocument(chatId, item.filename, item.text);
+    } else if (item.text) {
+      const body = item.title
+        ? `<b>${esc(item.title)}</b>\n<code>${esc(item.text)}</code>`
+        : `<code>${esc(item.text)}</code>`;
+      await sendMessage(TOKEN, chatId, body);
+    }
+  }
+
+  const nextOffset = offset + page.length;
+  const buttons = [];
+  const row = [];
+  if (nextOffset < items.length) {
+    row.push({ text: `▶️ بعدی (${Math.min(FREE_PAGE, items.length - nextOffset)} تا)`, callback_data: `freenext:${type}` });
+  }
+  row.push({ text: "🔄 آپدیت لینک‌ها", callback_data: `free:${type}:refresh` });
+  buttons.push(row);
+  buttons.push([{ text: "📦 منوی کانفیگ‌ها", callback_data: "free_menu" }]);
+
+  await sendMessage(TOKEN, chatId, nextOffset < items.length
+    ? `صفحه بعد هنوز ${items.length - nextOffset} مورد دارد.`
+    : "پایان لیست. برای موارد جدید «آپدیت لینک‌ها» را بزن.", {
+    reply_markup: { inline_keyboard: buttons },
+  });
+
+  session.offset = nextOffset;
+  freeSession.set(String(chatId), session);
+}
+
+async function handleFreeCallback(chatId, data) {
+  if (data === "free_menu") {
+    await sendMessage(
+      TOKEN,
+      chatId,
+      "📦 یک نوع کانفیگ رایگان/عمومی انتخاب کن:\n\n⚠️ ممکن است بعضی‌ها قطع باشند.",
+      { reply_markup: GET_CONFIG_KEYBOARD }
+    );
+    return;
+  }
+
+  let type = null;
+  let refresh = false;
+  if (data.startsWith("freenext:")) {
+    type = data.slice("freenext:".length);
+  } else if (data.startsWith("free:")) {
+    const rest = data.slice(5);
+    if (rest.endsWith(":refresh")) {
+      type = rest.slice(0, -":refresh".length);
+      refresh = true;
+    } else {
+      type = rest;
+    }
+  } else if (data === "free_refresh") {
+    const sess = freeSession.get(String(chatId));
+    if (!sess) {
+      await sendMessage(TOKEN, chatId, "اول یک نوع کانفیگ انتخاب کن.");
+      return;
+    }
+    type = sess.type;
+    refresh = true;
+  }
+
+  if (!type) return;
+
+  if (!refresh && data.startsWith("freenext:")) {
+    const sess = freeSession.get(String(chatId));
+    if (!sess || sess.type !== type || !sess.items?.length) {
+      refresh = true;
+    } else {
+      const typing = startTypingLoop(chatId);
+      try {
+        await sendFreePage(chatId, sess);
+      } finally {
+        clearInterval(typing);
+      }
+      return;
+    }
+  }
+
+  const typing = startTypingLoop(chatId);
+  try {
+    const res = await fetchFreeConfigs(type, 40);
+    const items = res.items || [];
+    if (!items.length) {
+      await sendMessage(TOKEN, chatId, `📥 ${esc(res.message)}`);
+      return;
+    }
+    const session = { type, items, offset: 0 };
+    freeSession.set(String(chatId), session);
+    await sendFreePage(chatId, session, `📥 ${esc(res.message)}`);
+  } catch (err) {
+    await sendMessage(TOKEN, chatId, `❌ خطا در دریافت: <code>${esc(String(err.message || err))}</code>`);
+  } finally {
+    clearInterval(typing);
+  }
+}
+
+
 async function handleCallback(cq) {
   const chatId = cq.message?.chat?.id;
   const data = cq.data;
@@ -192,27 +308,8 @@ async function handleCallback(cq) {
   } catch {}
 
   // free public configs — no pending file required
-  if (data.startsWith("free:")) {
-    const type = data.slice(5);
-    const typing = startTypingLoop(chatId);
-    try {
-      const res = await fetchFreeConfigs(type, 5);
-      clearInterval(typing);
-      await sendMessage(TOKEN, chatId, `📥 ${esc(res.message)}`);
-      for (const item of res.items || []) {
-        if (item.filename && item.text) {
-          await sendDocument(chatId, item.filename, item.text);
-        } else if (item.text) {
-          const body = item.title
-            ? `<b>${esc(item.title)}</b>\n<code>${esc(item.text)}</code>`
-            : `<code>${esc(item.text)}</code>`;
-          await sendMessage(TOKEN, chatId, body);
-        }
-      }
-    } catch (err) {
-      clearInterval(typing);
-      await sendMessage(TOKEN, chatId, `❌ خطا در دریافت: <code>${esc(String(err.message || err))}</code>`);
-    }
+  if (data.startsWith("free:") || data.startsWith("freenext:") || data === "free_refresh") {
+    await handleFreeCallback(chatId, data);
     return;
   }
 
