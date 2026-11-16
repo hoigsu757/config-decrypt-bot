@@ -51,8 +51,30 @@ export async function pinMessage(token, chatId, messageId) {
   } catch {}
 }
 
-export async function downloadFile(token, fileId) {
-  const file = await tgApi(token, "getFile", { file_id: fileId });
+export async function downloadFile(token, fileId, knownSize) {
+  // Telegram Bot API cannot download files larger than 20MB via getFile
+  if (knownSize && knownSize > 20 * 1024 * 1024) {
+    throw new Error(
+      "FILE_TOO_BIG: حجم فایل بیشتر از ۲۰ مگابایت است. تلگرام به ربات اجازه دانلود بالای ۲۰MB را نمی‌دهد. فایل کوچک‌تر بفرست یا APK را فشرده/تقسیم کن."
+    );
+  }
+  let file;
+  try {
+    file = await tgApi(token, "getFile", { file_id: fileId });
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (/too big|file is too big/i.test(msg)) {
+      throw new Error(
+        "FILE_TOO_BIG: حجم فایل بیشتر از ۲۰ مگابایت است. تلگرام به ربات اجازه دانلود بالای ۲۰MB را نمی‌دهد. یک APK سبک‌تر بفرست."
+      );
+    }
+    throw e;
+  }
+  if (file.file_size && file.file_size > 20 * 1024 * 1024) {
+    throw new Error(
+      "FILE_TOO_BIG: حجم فایل بیشتر از ۲۰ مگابایت است. تلگرام به ربات اجازه دانلود بالای ۲۰MB را نمی‌دهد."
+    );
+  }
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`download failed: ${res.status}`);

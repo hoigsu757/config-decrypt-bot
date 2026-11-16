@@ -451,7 +451,7 @@ async function handleUpdate(update) {
     if (msg.document) {
       const typing = startTypingLoop(chatId);
       try {
-        const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id);
+        const { name, bytes } = await downloadFile(TOKEN, msg.document.file_id, msg.document.file_size);
         const isApk =
           waitingApk.get(String(chatId)) ||
           /\.apk$/i.test(name || "") ||
