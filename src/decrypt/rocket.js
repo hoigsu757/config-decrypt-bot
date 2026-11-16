@@ -24,11 +24,17 @@ export async function tryRocket(name, text) {
     r.server.remark = pick(flat, ["remark", "name", "title"]);
     r.server.host =
       pick(flat, ["2", "host", "hostname", "server", "ip"]) || firstHost(flat);
-    r.server.port = String(pick(flat, ["port", "serverPort", "3"]) || firstPort(flat) || "");
+    // key "3" = remote SSH port; nested "port" under "6" is local SOCKS (often 7300)
+    const remotePort = pick(flat, ["3", "serverPort"]);
+    const localPort = pick(flat, ["port"]); // from nested map after collect()
+    r.server.port = String(remotePort || localPort || firstPort(flat) || "");
     r.server.user = pick(flat, ["1", "4", "user", "username", "login"]);
     r.server.password = pick(flat, ["5", "password", "pass", "pwd"]);
     if (!r.server.host) return null;
-    r.note = "Rocket Tunnel — معمولاً SSH/Direct است.";
+    r.server.localPort = localPort != null ? String(localPort) : undefined;
+    r.note = localPort
+      ? `Rocket Tunnel — SSH پورت ${r.server.port} | SOCKS محلی ${localPort}`
+      : "Rocket Tunnel — معمولاً SSH/Direct است.";
     r._rocketMap = flattenToRocketMap(flat, r.server);
     r._rocketUrl = text.match(/https?:\/\/rcktnl\.site\/i\/[^\s]+/i)?.[0] || null;
     return r;
@@ -39,21 +45,23 @@ export async function tryRocket(name, text) {
 
 /** Build importable https://rcktnl.site/i/... from server fields */
 export async function buildRocketUrl(server, extra = {}) {
+  const remote = Number(server.port) || 22;
+  const local = Number(server.localPort || extra.localPort || 7300);
   const map = {
     "0": server.protocol || "ssh_direct",
     "1": server.user || "",
     "2": server.host || "",
-    "3": Number(server.port) || 22,
+    "3": remote,
     "4": server.user || "",
     "5": server.password || "",
     "6": {
       hostname: extra.localHost || "127.0.0.1",
-      port: Number(server.port) || 22,
+      port: local,
     },
     "9": "password",
     "18": false,
   };
-  if (extra.remark) map["remark"] = extra.remark;
+  if (extra.remark) map["remark"] = String(extra.remark);
 
   const packed = encodeMsgpack([map]);
   const compressed = await deflate(packed);
@@ -74,7 +82,7 @@ function flattenToRocketMap(flat, server) {
     "5": server.password || flat["5"] || "",
     "6": {
       hostname: flat.hostname || "127.0.0.1",
-      port: Number(flat.port || server.port || 22),
+      port: Number(server.localPort || flat.port || 7300),
     },
     "9": flat["9"] || "password",
     "18": flat["18"] === true,
